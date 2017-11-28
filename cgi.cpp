@@ -1,18 +1,4 @@
-#include <iostream>
-#include <cstdlib>
-#include <sys/time.h>
-#include <sys/types.h>
-#include <unistd.h>
-#include <cstring>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <stdio.h>
-#include <sys/stat.h>
-#include <fcntl.h>
-
-using namespace std;
-#define MAX_BUF 1024
+#include "config.h"
 
 typedef struct info {
 	int connfd;
@@ -32,7 +18,7 @@ typedef struct data {
 } Data;
 
 Data server_data[5];
-char response[MAX_BUF],msg[MAX_BUF],add_br[MAX_BUF];
+char response[MAX_BUF],msg[MAX_BUF];
 
 int readline(int fd,char* ptr) {
 	char* now = ptr;
@@ -50,22 +36,19 @@ int main(int argc, char* argv[],char* envp[]) {
 	char parameter[15][100] = {0};
 	char* query = getenv("QUERY_STRING");
 	//cout << query << endl;
-
-	int id = 0, i = 1;
+	int id = 0, para_num = 1;
 	char* token = strtok(query,"&");
 	strcpy(parameter[0],token);
 	while(token = strtok(NULL, "&")) strcpy(parameter[i++],token);
 
-	for(int k = 0; k < i; k++) {
+	for(int k = 0; k < para_num; k++) {
 		strtok(parameter[k],"=");
 		char* val = strtok(NULL, "&");
 		if(val != NULL) {
 		 	if(parameter[k][0] == 'h') strcpy(server_data[id].ip,val); 
 		 	else if(parameter[k][0] == 'p') server_data[id].port = atoi(val); 
-		 	else if(parameter[k][0] == 'f') sprintf(server_data[id++].filename, "%s" ,val);
+		 	else if(parameter[k][0] == 'f') sprintf(server_data[id++].filename, "%s" ,val); //need to modify
 	 	}
-	 	else if(parameter[k][0] == 'p') server_data[id++].port = 0;
-	 	
 	}
 
 	int server_num = id, maxfd = 0, total_conn = 0;
@@ -85,7 +68,6 @@ int main(int argc, char* argv[],char* envp[]) {
 	FD_ZERO(&wset);
 
 	for(int id = 0; id < server_num; id++) {
-		if(server_data[id].port == 0) continue;
 	 	Info& server = server_info[id];
  		server.connfd = socket(AF_INET, SOCK_STREAM, 0);
  		client_sin.sin_family = AF_INET;
@@ -173,7 +155,6 @@ int main(int argc, char* argv[],char* envp[]) {
 	 					FD_CLR(server.connfd, &wset);
 	 				}
 	 			}
-	 			//usleep(200000);//wait for response
 	 		}
 	 	}
 	 }

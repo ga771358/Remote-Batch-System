@@ -2,8 +2,8 @@
 
 typedef struct info {
 	int connfd;
-	int batch_file;
-	char msg[MAX_BUF];
+	FILE* batch_file;
+	char msg[MAXBUF];
 	char* pos;
 	int left;
 	bool canwrite;
@@ -18,7 +18,7 @@ typedef struct data {
 } Data;
 
 Data server_data[5];
-char response[MAX_BUF],msg[MAX_BUF];
+char response[MAXBUF],msg[MAXBUF];
 
 int readline(int fd,char* ptr) {
 	char* now = ptr;
@@ -32,14 +32,13 @@ int readline(int fd,char* ptr) {
 
 int main(int argc, char* argv[],char* envp[]) {
 	 
-	//char query[MAX_BUF] = "h1=140.113.216.36&p1=1234&f1=t1.txt&h2=140.113.216.36&p2=1235&f2=t2.txt&h3=140.113.216.36&p3=1236&f3=t3.txt&h4=140.113.216.36&p4=1237&f4=t4.txt&h5=140.113.216.36&p5=1238&f5=t5.txt";
-	char parameter[15][100] = {0};
+	//char query[MAXBUF] = "h1=140.113.216.36&p1=1234&f1=t1.txt&h2=140.113.216.36&p2=1235&f2=t2.txt&h3=140.113.216.36&p3=1236&f3=t3.txt&h4=140.113.216.36&p4=1237&f4=t4.txt&h5=140.113.216.36&p5=1238&f5=t5.txt";
+	char* parameter[15] = {0};
 	char* query = getenv("QUERY_STRING");
 	//cout << query << endl;
 	int id = 0, para_num = 1;
-	char* token = strtok(query,"&");
-	strcpy(parameter[0],token);
-	while(token = strtok(NULL, "&")) strcpy(parameter[i++],token);
+	parameter[0] = strtok(query,"&");
+	while(parameter[para_num++] = strtok(NULL, "&"));
 
 	for(int k = 0; k < para_num; k++) {
 		strtok(parameter[k],"=");
@@ -84,7 +83,7 @@ int main(int argc, char* argv[],char* envp[]) {
 			FD_SET(server.connfd, &rset);
 			FD_SET(server.connfd, &wset);
 			if(server.connfd > maxfd) maxfd = server.connfd;
-    		server.batch_file = open(server_data[id].filename , O_RDONLY);
+    		server.batch_file = fopen(server_data[id].filename , "r");
     		server.canwrite = 0;
     		//perror("open");
 			server.left = 0;
@@ -100,9 +99,8 @@ int main(int argc, char* argv[],char* envp[]) {
 	 		if(server.connfd < 0) continue;
 	 		
 	 		if(FD_ISSET(server.connfd, &result_rset)) {
-	 			memset(msg, 0, MAX_BUF);
-	 			memset(add_br, 0, MAX_BUF);
-	 			if(read(server.connfd, msg, MAX_BUF) > 0) {
+	 			memset(msg, 0, MAXBUF);
+	 			if(read(server.connfd, msg, MAXBUF) > 0) {
 	 				cout << "<script>document.all['m" << id << "'].innerHTML += \"";
 	 				for(int pos = 0,len = strlen(msg); pos != len; pos++) {
 	 					if(msg[pos] == '\n') cout << "<br>";
@@ -133,23 +131,26 @@ int main(int argc, char* argv[],char* envp[]) {
 	 				server.left -= nwrite;
 	 			}
 	 			else if(server.canwrite){
-	 				memset(server.msg, 0 , MAX_BUF);
-	 				memset(add_br, 0 , MAX_BUF);
-	 				int nread = readline(server.batch_file, server.msg);
-	 				int nwrite = write(server.connfd, server.msg, nread);
-	 				server.canwrite = 0;
-	 				server.pos = server.msg + nwrite;
-	 				server.left = nread - nwrite;
-	 				strtok(server.msg,"\r\n");
-	 				cout << "<script>document.all['m" << id << "'].innerHTML += \"<b>";
-	 				for(int pos = 0,len = strlen(server.msg); pos != len; pos++) {
-	 					if(server.msg[pos] == '>') cout << "&gt;";
-	 					else if(server.msg[pos] == '<') cout << "&lt;";
-	 					else if(server.msg[pos] == '\n') cout << "error!" << endl;
-	 					else if(server.msg[pos] == ' ') cout << "&nbsp;";
-	 					else cout << server.msg[pos];
+	 				memset(server.msg, 0 , MAXBUF);
+	 				int nread = 0;
+	 				if(fgets(server.msg, MAXBUF, server.batch_file) != NULL)  {
+		 				nread = strlen(server.msg);
+		 				int nwrite = write(server.connfd, server.msg, nread);
+		 				server.canwrite = 0;
+		 				server.pos = server.msg + nwrite;
+		 				server.left = nread - nwrite;
+
+		 				strtok(server.msg,"\r\n");
+		 				cout << "<script>document.all['m" << id << "'].innerHTML += \"<b>";
+		 				for(int pos = 0,len = strlen(server.msg); pos != len; pos++) {
+		 					if(server.msg[pos] == '>') cout << "&gt;";
+		 					else if(server.msg[pos] == '<') cout << "&lt;";
+		 					else if(server.msg[pos] == '\n') cout << "error!" << endl;
+		 					else if(server.msg[pos] == ' ') cout << "&nbsp;";
+		 					else cout << server.msg[pos];
+		 				}
+		 				cout << "</b><br>\";</script>";
 	 				}
-	 				cout << "</b><br>\";</script>";
  		 			if(nread == 0 || strncmp("exit",server.msg,4) == 0) {
 	 					shutdown(server.connfd, SHUT_WR);
 	 					FD_CLR(server.connfd, &wset);

@@ -15,9 +15,7 @@ int TcpListen(struct sockaddr_in* servaddr,socklen_t servlen,int port){
     return listenfd;
 }
 
-void removezombie(int signo){    
-    while ( waitpid(-1 , NULL, WNOHANG) > 0 ) cout << "remove zombie!" << endl;
-}
+void removezombie(int signo) { while ( waitpid(-1 , NULL, WNOHANG) > 0 ) cout << "remove zombie!" << endl; }
 
 int readline(int fd,char* ptr) {
 	char* now = ptr;
@@ -41,25 +39,33 @@ int main(int argc, char* argv[]){
     int listenfd = TcpListen(&serv_addr, sizeof(serv_addr), atoi(argv[1]));
 
     while(true) {
-
     	int connfd = accept(listenfd, (struct sockaddr *) &cli_addr, &clilen);
 
     	int pid = fork();
-    	if(pid == 0){
+    	if(pid == 0) {
     		
     		char request[MAXBUF],content[MAXBUF] = {0};
     		
 			readline(connfd, request);
-			while(readline(connfd, content)) if(strcmp(content, "\r\n") == 0) break;
+			cout << request;
+			while(readline(connfd, content)) {
+				cout << content;
+				if(strcmp(content, "\r\n") == 0) break;
+			}
 			
 			char* type = strtok(request, "/");
 			if(strncmp("GET", type, 3) == 0) {
-				char* url = strtok(NULL, " "), *protocol = strtok(NULL, "\r\n");
-				char full_path[MAXBUF],name[MAXBUF],code[MAXBUF];
+				char* url = strtok(NULL, " "),*protocol = strtok(NULL, "\r\n");
+				if(protocol == NULL) protocol = url, url = NULL;
+				char full_path[MAXBUF], name[MAXBUF], code[MAXBUF];
 				strtok(url, ".");
 				char* extension = strtok(NULL,"?");
-				sprintf(name, "%s.%s", url , extension);
-				sprintf(full_path, "%s%s", ROOT, name);
+				if(url == NULL) sprintf(full_path, "%s(null)",ROOT);
+				else {
+					if(extension == NULL) strcpy(name, url);
+					else sprintf(name, "%s.%s", url , extension);
+					sprintf(full_path, "%s%s", ROOT, name);
+				}
 				cout << "full_path: " << full_path << endl;
 				cout << "file_name: " << name << endl;
 				if(extension != NULL && strcmp("cgi", extension) == 0) {
@@ -88,7 +94,6 @@ int main(int argc, char* argv[]){
 				else {
 					int file_fd = open(full_path , O_RDONLY), n;
 					if(file_fd > 0) {
-
 						sprintf(code,"%s 200 OK\r\n",protocol);
     					if(strncmp("htm", extension, 3) == 0 ) sprintf(content,"%sContent-Type: %s\r\n\r\n", code, "text/html");
     					else sprintf(content,"%sContent-Type: %s\r\n\r\n", code, "text/plain");
@@ -99,8 +104,6 @@ int main(int argc, char* argv[]){
     						write(connfd, content, n);
     						memset(content, 0 , MAXBUF);
     					}
-
-    					close(file_fd);
 					}
 					else {
 						sprintf(code,"%s 404 Not Found\r\n\r\n", protocol);

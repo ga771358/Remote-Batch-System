@@ -9,9 +9,10 @@ using namespace std;
 #define MAXLEN 3000
 #define STACK_SIZE 10000000
 #define WM_SOCKET_NOTIFY (WM_USER + 1)
+#define WM_SERVER_NOTIFY (WM_SOCKET_NOTIFY + 1);
 
 typedef struct info {
-	int connfd;
+	SOCKET connfd;
 	FILE* file;
 	char msg[MAXBUF];
 	char* pos;
@@ -26,11 +27,6 @@ typedef struct data {
 	char filename[100];
 } Data;
 Data server_data[5];
-
-struct argument {
-	SOCKET connfd;
-	char QUERY_STRING[MAXLEN];
-};
 
 int hostname_to_ip(char* hostname, char* ip) {
 	struct hostent *hst;
@@ -48,9 +44,10 @@ void close_socket(Info& server) {
 	server.connfd = -1;
 }
 
-int CGIproc(struct argument arg) {
+int server_num, total_conn;
+
+int doCGI(HWND hwndEdit, HWND hwnd, SOCKET ssock) {
 	
-	SOCKET ssock = arg.connfd;
 	char* parameter[15] = {0}, ip[100];
 	
 	int id = 0, para_num = 0;
@@ -67,7 +64,7 @@ int CGIproc(struct argument arg) {
 	 	}
 	}
 
-	int server_num = id, maxfd = 0, total_conn = 0;
+	server_num = id,total_conn = 0;
 	char output[MAXBUF] = {0};
 	strcat(output, "Content-type: text/html\n\n");
 	strcat(output, "<html><head><meta http-equiv=\"Content-Type\" content=\"text/html; charset=big5\" /><title>Network Programming Homework 3</title></head>");
@@ -91,13 +88,24 @@ int CGIproc(struct argument arg) {
 	send(ssock, output, strlen(output), 0);
 			
 	struct sockaddr_in client_sin;
-	fd_set rset, wset, result_rset, result_wset;
-	FD_ZERO(&rset);
-	FD_ZERO(&wset);
 
 	for(int id = 0; id < server_num; id++) {
-	 	Info& server = server_info[id];
- 		server.connfd = socket(AF_INET, SOCK_STREAM, 0);
+		Info& server = server_info[id];
+		WSADATA wsaData;
+		int ret = WSAStartup(MAKEWORD(2, 2), &wsaData);
+		if (ret != NO_ERROR) {
+			EditPrintf(hwndEdit, TEXT("WSAStartup function failed with error: %d\r\n"), r);
+			return 1;
+		}
+
+		SOCKET csock;
+		server.connfd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+		if (csock == INVALID_SOCKET) {
+			EditPrintf(hwndEdit, TEXT("socket function failed with error: %ld\r\n"), WSAGetLastError());
+			WSACleanup();
+			return 1;
+		}
+ 		
  		client_sin.sin_family = AF_INET;
  		if(hostname_to_ip(server_data[id].domain_name, ip)) close_socket(server);
  		else {
@@ -108,90 +116,22 @@ int CGIproc(struct argument arg) {
 				close_socket(server);
 			}
 			else {
+				EditPrintf(hwndEdit, TEXT("connected to %s\r\n"), ip);
 				total_conn++;
-				FD_SET(server.connfd, &rset);
-				FD_SET(server.connfd, &wset);
-				if(server.connfd > maxfd) maxfd = server.connfd;
 	    		server.file = fopen(server_data[id].filename , "r");
 	    		server.cansend = 0;
 				server.left = 0;
+				int err = WSAAsyncSelect(csock, hwnd, WM_SERVER_NOTIFY, FD_CLOSE | FD_READ | FD_WRITE);
+				if (err == SOCKET_ERROR) {
+					EditPrintf(hwndEdit, TEXT("=== Error: select error ===\r\n"));
+					closesocket(csock);
+					WSACleanup();
+					return 1;
+				}
 			}
 		}
 	}
 
-	while(total_conn) {
-
-	 	result_rset = rset, result_wset = wset;
-	 	select(maxfd+1, &result_rset, &result_wset, NULL, NULL);
-	 	for(int id = 0; id < server_num; id++ ) {
-	 		Info& server = server_info[id];
-	 		if(server.connfd < 0) continue;
-	 		
-	 		if(FD_ISSET(server.connfd, &result_rset)) {
-	 			char msg[MAXBUF] = {0};
-	 			if(read(server.connfd, msg, MAXBUF) > 0) {
-	 				sprintf(output, "<script>document.all['m%d'].innerHTML += \"", id);
-	 				
-	 				for(int pos = 0,len = strlen(msg); pos != len; pos++) {
-	 					if(msg[pos] == '\n') strcat(output, "<br>");
-	 					else if(msg[pos] == '<') strcat(output, "&lt;");
-	 					else if(msg[pos] == '>') strcat(output, "&gt;");
-	 					else if(msg[pos] == '"') strcat(output, "&quot;");
-	 					else if(msg[pos] == ' ') strcat(output, "&nbsp;");
-	 					else if(msg[pos] == '\r') ;
-	 					else {
-	 						if(msg[pos] == '%') server.cansend = 1;
-	 						strcat(output, msg[pos]);
-	 					}
-	 				}
-	 				strcat(output, "\";</script>");
-	 				send(ssock, output, strlen(output), 0);
-	 			}
-	 			else {
-	 				FD_CLR(server.connfd,&rset);
-	 				FD_CLR(server.connfd,&wset);
-	 				close_socket(server);
-	 				total_conn--;
-	 			}
-	 		}
-	 		if(FD_ISSET(server.connfd, &result_wset)) {
-	 			if(server.left != 0) {
-	 				int nwrite = write(server.connfd, server.pos, server.left);
-	 				server.pos += nwrite;
-	 				server.left -= nwrite;
-	 			}
-	 			else if(server.cansend){
-	 				memset(server.msg, 0 , MAXBUF);
-	 				int nread = 0;
-	 				if(fgets(server.msg, MAXBUF, server.file) != NULL)  {
-		 				nread = strlen(server.msg);
-		 				int nwrite = write(server.connfd, server.msg, nread);
-		 				server.pos = server.msg + nwrite;
-		 				server.left = nread - nwrite;
-		 				server.cansend = 0;
-		 				
-		 				strtok(server.msg,"\r\n");
-		 				sprintf(output, "<script>document.all['m%d'].innerHTML += \"<b>", id);
-		 				for(int pos = 0,len = strlen(server.msg); pos != len; pos++) {
-		 					if(server.msg[pos] == '>') strcat(output, "&gt;");
-		 					else if(server.msg[pos] == '<') strcat(output, "&lt;");
-		 					else if(server.msg[pos] == ' ') strcat(output, "&nbsp;");
-		 					else strcat(output, server.msg[pos]);
-		 				}
-		 				strcat(output, "</b><br>\";</script>");
-	 				}
- 		 			if(nread == 0 || strncmp("exit",server.msg, 4) == 0) {
- 		 				fclose(server.file);
-	 					shutdown(server.connfd, SHUT_WR);
-	 					FD_CLR(server.connfd, &wset);
-	 				}
-	 			}
-	 		}
-	 	}
-	}
-	strcpy(output, "</font></body></html>");
-	send(ssock, output, strlen(output), 0);
-	close_socket(ssock);
 	return 0;
  }
 
@@ -328,10 +268,9 @@ BOOL CALLBACK MainDlgProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam)
 
 								if(parameter != NULL) strcpy(QUERY_STRING, "%s", parameter);
 								else strcpy(QUERY_STRING, "h1=&p1=&f1=&h2=&p2=&f2=&h3=&p3=&f3=&h4=&p4=&f4=&h5=&p5=&f5=");
-								struct arg argument;
-								strcpy(argument.QUERY_STRING, QUERY_STRING);
-								argument.connfd = ssock;
-								_beginthread((void(*)(void*)) CGIproc, STACK_SIZE, (void *)(argument));
+								
+								doCGI(hwndEdit, hwnd, ssock);
+								
 							}
 							else {
 								sprintf(code,"%s 404 Not Found\r\n\r\n", protocol);
@@ -369,12 +308,89 @@ BOOL CALLBACK MainDlgProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam)
 					break;
 				case FD_WRITE:
 				//Write your code for write event here
+					if(total_conn == 0) {
+						strcpy(output, "</font></body></html>");
+						send(ssock, output, strlen(output), 0);
+						close_socket(ssock);
+					}
 					break;
 				case FD_CLOSE:
 					break;
 			};
 			break;
-		
+		case WM_SERVER_NOTIFY:
+			switch( WSAGETSELECTEVENT(lParam) )
+			{
+				case FD_READ:
+					char msg[MAXBUF] = {0};
+					SOCKET csock = wParam;
+					int nread = recv(csock, msg, MAXBUF, 0), id;
+					for(id = 0; id < server_num; id++) if(csock == server_info[id].connfd) break;
+					Info& server = server_info[id];
+		 			if(nread > 0) {
+		 				EditPrintf(hwndEdit, TEXT("=== [server] recv: START ===\r\n%s\r\n== recv: END ==\r\n"), msg);
+		 				sprintf(output, "<script>document.all['m%d'].innerHTML += \"", id);
+		 				
+		 				for(int pos = 0,len = strlen(msg); pos != len; pos++) {
+		 					if(msg[pos] == '\n') strcat(output, "<br>");
+		 					else if(msg[pos] == '<') strcat(output, "&lt;");
+		 					else if(msg[pos] == '>') strcat(output, "&gt;");
+		 					else if(msg[pos] == '"') strcat(output, "&quot;");
+		 					else if(msg[pos] == ' ') strcat(output, "&nbsp;");
+		 					else if(msg[pos] == '\r') ;
+		 					else {
+		 						if(msg[pos] == '%') server.cansend = 1;
+		 						strcat(output, msg[pos]);
+		 					}
+		 				}
+		 				strcat(output, "\";</script>");
+		 				send(ssock, output, strlen(output), 0);
+		 			}
+		 			else {
+		 				close_socket(server);
+		 			}
+					break;
+				case FD_WRITE:
+					SOCKET csock = wParam;
+					int id;
+					for(id = 0; id < server_num; id++) if(csock == server_info[id].connfd) break;
+					Info& server = server_info[id];
+
+					if(server.left != 0) {
+		 				int nwrite = send(server.connfd, server.pos, server.left, 0);
+		 				server.pos += nwrite;
+		 				server.left -= nwrite;
+		 			}
+		 			else if(server.cansend){
+		 				memset(server.msg, 0 , MAXBUF);
+		 				int nread = 0;
+		 				if(fgets(server.msg, MAXBUF, server.file) != NULL)  {
+			 				nread = strlen(server.msg);
+			 				int nwrite = send(server.connfd, server.msg, nread, 0);
+			 				server.pos = server.msg + nwrite;
+			 				server.left = nread - nwrite;
+			 				server.cansend = 0;
+			 				
+			 				strtok(server.msg,"\r\n");
+			 				sprintf(output, "<script>document.all['m%d'].innerHTML += \"<b>", id);
+			 				for(int pos = 0,len = strlen(server.msg); pos != len; pos++) {
+			 					if(server.msg[pos] == '>') strcat(output, "&gt;");
+			 					else if(server.msg[pos] == '<') strcat(output, "&lt;");
+			 					else if(server.msg[pos] == ' ') strcat(output, "&nbsp;");
+			 					else strcat(output, server.msg[pos]);
+			 				}
+			 				strcat(output, "</b><br>\";</script>");
+			 				send(ssock, output, strlen(output), 0); //WM_SOCKET_NOTIFY?
+		 				}
+	 		 			if(nread == 0 || strncmp("exit",server.msg, 4) == 0) {
+	 		 				fclose(server.file);
+		 					shutdown(server.connfd, SHUT_WR);
+		 				}
+		 			}
+					break;
+				case FD_CLOSE:
+					break;
+			}
 		default:
 			return FALSE;
 

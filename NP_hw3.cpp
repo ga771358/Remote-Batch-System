@@ -5,8 +5,195 @@ using namespace std;
 #include "resource.h"
 
 #define SERVER_PORT 7799
-
+#define MAXBUF 10250
+#define MAXLEN 3000
+#define STACK_SIZE 10000000
 #define WM_SOCKET_NOTIFY (WM_USER + 1)
+
+typedef struct info {
+	int connfd;
+	FILE* file;
+	char msg[MAXBUF];
+	char* pos;
+	int left;
+	bool cansend;
+} Info;
+Info server_info[5];
+
+typedef struct data {
+	char domain_name[100];
+	int port;
+	char filename[100];
+} Data;
+Data server_data[5];
+
+struct argument {
+	SOCKET connfd;
+	char QUERY_STRING[MAXLEN];
+};
+
+int hostname_to_ip(char* hostname, char* ip) {
+	struct hostent *hst;
+	struct in_addr **addr_list;
+	memset(ip, 0 , 100);
+	if((hst = gethostbyname(hostname)) == NULL) return 1;
+	addr_list = (struct in_addr **) hst->h_addr_list;
+	if(*addr_list == NULL) return 1;
+	else strcpy(ip, inet_ntoa(*addr_list[0]));
+	return 0;
+}
+
+void close_socket(Info& server) {
+	closesocket(server.connfd);
+	server.connfd = -1;
+}
+
+int CGIproc(struct argument arg) {
+	
+	SOCKET ssock = arg.connfd;
+	char* parameter[15] = {0}, ip[100];
+	
+	int id = 0, para_num = 0;
+	parameter[para_num++] = strtok(arg.QUERY_STRING, "&");
+	while(parameter[para_num++] = strtok(NULL, "&"));
+
+	for(int k = 0; k < para_num; k++) {
+		strtok(parameter[k], "=");
+		char* val = strtok(NULL, "&");
+		if(val != NULL) {
+		 	if(parameter[k][0] == 'h') strcpy(server_data[id].domain_name, val); 
+		 	else if(parameter[k][0] == 'p') server_data[id].port = atoi(val); 
+		 	else if(parameter[k][0] == 'f') sprintf(server_data[id++].filename, "%s" , val); 
+	 	}
+	}
+
+	int server_num = id, maxfd = 0, total_conn = 0;
+	char output[MAXBUF] = {0};
+	strcat(output, "Content-type: text/html\n\n");
+	strcat(output, "<html><head><meta http-equiv=\"Content-Type\" content=\"text/html; charset=big5\" /><title>Network Programming Homework 3</title></head>");
+	strcat(output, "<body bgcolor=#336699><font face=\"Courier New\" size=2 color=#FFFF99>");
+	strcat(output, "<table width=\"800\" border=\"1\">");
+	strcat(output, "<tr>");
+	send(ssock, output, strlen(output), 0);
+
+	for(int id = 0; id < server_num; id++) {
+		sprintf(output, "<td>%s</td>", server_data[id].domain_name);
+		send(ssock, output, strlen(output), 0);
+	}
+	strcpy(output, "</tr><tr>");
+	send(ssock, output, strlen(output), 0);
+	for(int id = 0; id < server_num; id++) {
+		cout << "<td valign=\"top\" id=\"m" << id << "\"></td>";
+		sprintf(output, "<td valign=\"top\" id=\"m%d\"></td>", id);
+		send(ssock, output, strlen(output), 0);
+	}
+	strcpy(output, "</tr></table>");
+	send(ssock, output, strlen(output), 0);
+			
+	struct sockaddr_in client_sin;
+	fd_set rset, wset, result_rset, result_wset;
+	FD_ZERO(&rset);
+	FD_ZERO(&wset);
+
+	for(int id = 0; id < server_num; id++) {
+	 	Info& server = server_info[id];
+ 		server.connfd = socket(AF_INET, SOCK_STREAM, 0);
+ 		client_sin.sin_family = AF_INET;
+ 		if(hostname_to_ip(server_data[id].domain_name, ip)) close_socket(server);
+ 		else {
+			inet_pton(AF_INET, ip, &client_sin.sin_addr);
+			client_sin.sin_port = htons(server_data[id].port);
+
+			if(connect(server.connfd, (struct sockaddr *) &client_sin, sizeof(client_sin)) < 0) {
+				close_socket(server);
+			}
+			else {
+				total_conn++;
+				FD_SET(server.connfd, &rset);
+				FD_SET(server.connfd, &wset);
+				if(server.connfd > maxfd) maxfd = server.connfd;
+	    		server.file = fopen(server_data[id].filename , "r");
+	    		server.cansend = 0;
+				server.left = 0;
+			}
+		}
+	}
+
+	while(total_conn) {
+
+	 	result_rset = rset, result_wset = wset;
+	 	select(maxfd+1, &result_rset, &result_wset, NULL, NULL);
+	 	for(int id = 0; id < server_num; id++ ) {
+	 		Info& server = server_info[id];
+	 		if(server.connfd < 0) continue;
+	 		
+	 		if(FD_ISSET(server.connfd, &result_rset)) {
+	 			char msg[MAXBUF] = {0};
+	 			if(read(server.connfd, msg, MAXBUF) > 0) {
+	 				sprintf(output, "<script>document.all['m%d'].innerHTML += \"", id);
+	 				
+	 				for(int pos = 0,len = strlen(msg); pos != len; pos++) {
+	 					if(msg[pos] == '\n') strcat(output, "<br>");
+	 					else if(msg[pos] == '<') strcat(output, "&lt;");
+	 					else if(msg[pos] == '>') strcat(output, "&gt;");
+	 					else if(msg[pos] == '"') strcat(output, "&quot;");
+	 					else if(msg[pos] == ' ') strcat(output, "&nbsp;");
+	 					else if(msg[pos] == '\r') ;
+	 					else {
+	 						if(msg[pos] == '%') server.cansend = 1;
+	 						strcat(output, msg[pos]);
+	 					}
+	 				}
+	 				strcat(output, "\";</script>");
+	 				send(ssock, output, strlen(output), 0);
+	 			}
+	 			else {
+	 				FD_CLR(server.connfd,&rset);
+	 				FD_CLR(server.connfd,&wset);
+	 				close_socket(server);
+	 				total_conn--;
+	 			}
+	 		}
+	 		if(FD_ISSET(server.connfd, &result_wset)) {
+	 			if(server.left != 0) {
+	 				int nwrite = write(server.connfd, server.pos, server.left);
+	 				server.pos += nwrite;
+	 				server.left -= nwrite;
+	 			}
+	 			else if(server.cansend){
+	 				memset(server.msg, 0 , MAXBUF);
+	 				int nread = 0;
+	 				if(fgets(server.msg, MAXBUF, server.file) != NULL)  {
+		 				nread = strlen(server.msg);
+		 				int nwrite = write(server.connfd, server.msg, nread);
+		 				server.pos = server.msg + nwrite;
+		 				server.left = nread - nwrite;
+		 				server.cansend = 0;
+		 				
+		 				strtok(server.msg,"\r\n");
+		 				sprintf(output, "<script>document.all['m%d'].innerHTML += \"<b>", id);
+		 				for(int pos = 0,len = strlen(server.msg); pos != len; pos++) {
+		 					if(server.msg[pos] == '>') strcat(output, "&gt;");
+		 					else if(server.msg[pos] == '<') strcat(output, "&lt;");
+		 					else if(server.msg[pos] == ' ') strcat(output, "&nbsp;");
+		 					else strcat(output, server.msg[pos]);
+		 				}
+		 				strcat(output, "</b><br>\";</script>");
+	 				}
+ 		 			if(nread == 0 || strncmp("exit",server.msg, 4) == 0) {
+ 		 				fclose(server.file);
+	 					shutdown(server.connfd, SHUT_WR);
+	 					FD_CLR(server.connfd, &wset);
+	 				}
+	 			}
+	 		}
+	 	}
+	}
+	strcpy(output, "</font></body></html>");
+	send(ssock, output, strlen(output), 0);
+	close_socket(ssock);
+	return 0;
+ }
 
 BOOL CALLBACK MainDlgProc(HWND, UINT, WPARAM, LPARAM);
 int EditPrintf (HWND, TCHAR *, ...);
@@ -109,11 +296,79 @@ BOOL CALLBACK MainDlgProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam)
 					break;
 				case FD_READ:
 				//Write your code for read event here.
-					
+					char request[MAXBUF] = {0},content[MAXBUF] = {0};
+    		
+					int length = recv(ssock, request, MAXBUF, 0);
+					EditPrintf(hwndEdit, TEXT("=== length: (%d) ===\r\n"), length);
+					EditPrintf(hwndEdit, TEXT("=== buf: \r\n %s ===\r\n"), request);
+
+					char* type = strtok(request, "/");
+					if(strncmp("GET", type, 3) == 0) {
+						char* url = strtok(NULL, " "),*protocol = strtok(NULL, "\r\n");
+						if(protocol == NULL) protocol = url, url = NULL;
+						char full_path[MAXLEN], name[MAXLEN], code[MAXLEN];
+						strtok(url, ".");
+						char* extension = strtok(NULL,"?");
+						if(url == NULL) sprintf(full_path, "%s(null)",ROOT);
+						else {
+							if(extension == NULL) strcpy(name, url);
+							else sprintf(name, "%s.%s", url , extension);
+							sprintf(full_path, "%s%s", ROOT, name);
+						}
+						EditPrintf(hwndEdit, TEXT("=== full_path: (%s) ===\r\n"), full_path);
+						EditPrintf(hwndEdit, TEXT("=== full_name: (%s) ===\r\n"), full_name);
+						
+						if(extension != NULL && strcmp("cgi", extension) == 0) {
+							char QUERY_STRING[MAXLEN];
+							struct stat sb;
+							if(stat(full_path, &sb) == 0 && sb.st_mode & S_IXUSR) {
+								char* parameter = strtok(NULL, " ");
+								sprintf(code,"%s 200 OK\r\n", protocol);
+								send(ssock, code, strlen(code), 0);
+
+								if(parameter != NULL) strcpy(QUERY_STRING, "%s", parameter);
+								else strcpy(QUERY_STRING, "h1=&p1=&f1=&h2=&p2=&f2=&h3=&p3=&f3=&h4=&p4=&f4=&h5=&p5=&f5=");
+								struct arg argument;
+								strcpy(argument.QUERY_STRING, QUERY_STRING);
+								argument.connfd = ssock;
+								_beginthread((void(*)(void*)) CGIproc, STACK_SIZE, (void *)(argument));
+							}
+							else {
+								sprintf(code,"%s 404 Not Found\r\n\r\n", protocol);
+		    					send(ssock, code, strlen(code), 0);
+							}
+						}
+						else {
+							FILE* fptr = fopen(full_path , "rb");
+							if(fptr != NULL) {
+								sprintf(code,"%s 200 OK\r\n",protocol);
+		    					if(strncmp("htm", extension, 3) == 0 ) sprintf(content,"%sContent-Type: %s\r\n\r\n", code, "text/html");
+		    					else sprintf(content,"%sContent-Type: %s\r\n\r\n", code, "text/plain");
+		    					send(ssock, content, strlen(content), 0);
+		    					EditPrintf(hwndEdit, TEXT("=== file: (%s) ===\r\n"), full_path);
+
+		    					int fd = fileno(fptr); //if you have a stream (e.g. from fopen), not a file descriptor.
+								struct stat info;
+								fstat(fd, &info);
+								int size = info.st_size;
+		    					memset(content, 0 , MAXLEN);
+		    					int fsize = fread(content, size, 1, fptr);
+		    					if(fsize != size) OutputDebugString("fread failed"); 
+
+		    					send(ssock, content, fsize, 0);
+							}
+							else {
+								sprintf(code,"%s 404 Not Found\r\n\r\n", protocol);
+		    					send(ssock, code, strlen(code), 0);
+							}
+							fclose(file_ptr);
+							closesocket(ssock);
+						}
+
+					}
 					break;
 				case FD_WRITE:
 				//Write your code for write event here
-
 					break;
 				case FD_CLOSE:
 					break;

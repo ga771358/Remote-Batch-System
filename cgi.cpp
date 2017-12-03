@@ -73,13 +73,17 @@ int main(int argc, char* argv[],char* envp[]) {
 	 	Info& server = server_info[id];
  		server.connfd = socket(AF_INET, SOCK_STREAM, 0);
  		client_sin.sin_family = AF_INET;
+
+ 		int flag = fcntl(server.connfd, F_GETFL, 0);
+ 		fcntl(server.connfd, F_SETFL, flag | O_NONBLOCK);
+
  		if(hostname_to_ip(server_data[id].domain_name, ip)) close_socket(server);
  		else {
 			inet_pton(AF_INET, ip, &client_sin.sin_addr);
 			client_sin.sin_port = htons(server_data[id].port);
 
 			if(connect(server.connfd, (struct sockaddr *) &client_sin, sizeof(client_sin)) < 0) {
-				close_socket(server);
+				if(errno != EINPROGRESS) close_socket(server);
 			}
 			else {
 				total_conn++;
@@ -94,7 +98,7 @@ int main(int argc, char* argv[],char* envp[]) {
 	}
 
 	while(total_conn) {
-
+		int err;
 	 	result_rset = rset, result_wset = wset;
 	 	select(maxfd+1, &result_rset, &result_wset, NULL, NULL);
 	 	for(int id = 0; id < server_num; id++ ) {
@@ -103,7 +107,7 @@ int main(int argc, char* argv[],char* envp[]) {
 	 		
 	 		if(FD_ISSET(server.connfd, &result_rset)) {
 	 			char msg[MAXBUF] = {0};
-	 			if(read(server.connfd, msg, MAXBUF) > 0) {
+	 			if((err = read(server.connfd, msg, MAXBUF)) > 0) {
 	 				cout << "<script>document.all['m" << id << "'].innerHTML += \"";
 	 				for(int pos = 0,len = strlen(msg); pos != len; pos++) {
 	 					if(msg[pos] == '\n') cout << "<br>";
@@ -119,16 +123,23 @@ int main(int argc, char* argv[],char* envp[]) {
 	 				}
 	 				cout << "\";</script>" << endl;
 	 			}
-	 			else {
+	 			else if(err == 0){
 	 				FD_CLR(server.connfd,&rset);
 	 				FD_CLR(server.connfd,&wset);
 	 				close_socket(server);
 	 				total_conn--;
 	 			}
+	 			else {
+	 				if(errno != EWOULDBLOCK) return 1;
+	 			}
 	 		}
 	 		if(FD_ISSET(server.connfd, &result_wset)) {
 	 			if(server.left != 0) {
 	 				int nwrite = write(server.connfd, server.pos, server.left);
+	 				if(nwrite < 0) {
+	 					if(errno != EWOULDBLOCK) return 1;
+	 					else continue;
+					}
 	 				server.pos += nwrite;
 	 				server.left -= nwrite;
 	 			}
@@ -138,6 +149,10 @@ int main(int argc, char* argv[],char* envp[]) {
 	 				if(fgets(server.msg, MAXBUF, server.file) != NULL)  {
 		 				nread = strlen(server.msg);
 		 				int nwrite = write(server.connfd, server.msg, nread);
+		 				if(nwrite < 0) {
+	 						if(errno != EWOULDBLOCK) return 1;
+	 						else continue;
+						}
 		 				server.pos = server.msg + nwrite;
 		 				server.left = nread - nwrite;
 		 				server.cansend = 0;

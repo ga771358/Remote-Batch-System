@@ -19,7 +19,7 @@ void removezombie(int signo) { while ( waitpid(-1 , NULL, WNOHANG) > 0 ) cout <<
 
 int readline(int fd,char* ptr) {
 	char* now = ptr;
-	memset(ptr, 0 , MAXBUF);
+	memset(ptr, 0 , MAXLINE);
     while(read(fd, now, 1) > 0) {
         if(*now !='\n') ++now;
         else return now-ptr+1;
@@ -33,7 +33,7 @@ int main(int argc, char* argv[]){
 	socklen_t clilen = sizeof(cli_addr);
     if(argv[1] == NULL) return 0;
  
- 	char ROOT[MAXBUF] = "/home/liuyikuan/RemoteBatchSystem/";
+ 	char ROOT[MAXLINE] = "/home/liuyikuan/RemoteBatchSystem/";
  	chdir(ROOT);
     signal(SIGCHLD, removezombie);
     int listenfd = TcpListen(&serv_addr, sizeof(serv_addr), atoi(argv[1]));
@@ -44,7 +44,7 @@ int main(int argc, char* argv[]){
     	int pid = fork();
     	if(pid == 0) {
     		
-    		char request[MAXBUF],content[MAXBUF] = {0};
+    		char request[MAXLINE], content[MAXLINE] = {0};
     		
 			readline(connfd, request);
 			cout << request;
@@ -57,7 +57,7 @@ int main(int argc, char* argv[]){
 			if(strncmp("GET", type, 3) == 0) {
 				char* url = strtok(NULL, " "),*protocol = strtok(NULL, "\r\n");
 				if(protocol == NULL) protocol = url, url = NULL;
-				char full_path[MAXBUF], name[MAXBUF], code[MAXBUF];
+				char full_path[MAXLINE], name[MAXLINE], code[MAXLINE];
 				strtok(url, ".");
 				char* extension = strtok(NULL,"?");
 				if(url == NULL) sprintf(full_path, "%s(null)",ROOT);
@@ -99,10 +99,10 @@ int main(int argc, char* argv[]){
     					else sprintf(content,"%sContent-Type: %s\r\n\r\n", code, "text/plain");
     					write(connfd, content, strlen(content));
 
-    					memset(content, 0 , MAXBUF);
-    					while(n = read(file_fd, content, MAXBUF)) {
+    					memset(content, 0 , MAXLINE);
+    					while(n = read(file_fd, content, MAXLINE)) {
     						write(connfd, content, n);
-    						memset(content, 0 , MAXBUF);
+    						memset(content, 0 , MAXLINE);
     					}
 					}
 					else {

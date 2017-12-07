@@ -24,4 +24,4 @@ using namespace std;
 #define MAXCONN 1000
 #define MAXCLI 35
 #define MAXNUM 10
-#define MAXBUF 10250
+#define MAXBUF 65535

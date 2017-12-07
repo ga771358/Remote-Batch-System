@@ -2,11 +2,12 @@
 
 typedef struct info {
 	int connfd;
-	FILE* file;
+	FILE* fptr;
 	char msg[MAXBUF];
 	char* pos;
-	int left;
-	bool cansend;
+	int left_to_read;
+	bool prompt;
+	bool connected;
 } Info;
 Info server_info[5];
 
@@ -33,10 +34,28 @@ void close_socket(Info& server) {
 	server.connfd = -1;
 }
 
+void convert_html(int id, char* buffer) {
+	bool line = 0;
+	cout << "<script>document.all['m" << id << "'].innerHTML += \"<b>";
+	for(int pos = 0,len = strlen(buffer); pos != len; pos++) {
+		if(buffer[pos] == '>') cout << "&gt;";
+		else if(buffer[pos] == '<') cout << "&lt;";
+		else if(buffer[pos] == ' ') cout << "&nbsp;";
+		else if(buffer[pos] == '\r') ;
+		else if(buffer[pos] == '\n') {
+			line = 1;
+			cout << "</b><br>\";</script>" << endl;
+		}
+		else cout << buffer[pos];
+	}
+	if (!line) cout << "</b>\";</script>" << endl;
+}
+
+int total_read = 0, total_write = 0;
 int main(int argc, char* argv[],char* envp[]) {
 	 
 	//char query[MAXBUF] = "h1=140.113.216.36&p1=1234&f1=t1.txt&h2=140.113.216.36&p2=1235&f2=t2.txt&h3=140.113.216.36&p3=1236&f3=t3.txt&h4=140.113.216.36&p4=1237&f4=t4.txt&h5=140.113.216.36&p5=1238&f5=t5.txt";
-	char* parameter[15] = {0}, ip[100];
+	char* parameter[16] = {0}, ip[100];
 	char* query = getenv("QUERY_STRING");
 	//cout << query << endl;
 	int id = 0, para_num = 0;
@@ -53,7 +72,7 @@ int main(int argc, char* argv[],char* envp[]) {
 	 	}
 	}
 
-	int server_num = id, maxfd = 0, total_conn = 0;
+	int server_num = id, maxfd = 0, conn_num = 0;
 	cout << "Content-type: text/html\n\n" << endl;
 	cout << "<html><head><meta http-equiv=\"Content-Type\" content=\"text/html; charset=big5\" /><title>Network Programming Homework 3</title></head>" << endl;
 	cout << "<body bgcolor=#336699><font face=\"Courier New\" size=2 color=#FFFF99>" << endl;
@@ -83,99 +102,128 @@ int main(int argc, char* argv[],char* envp[]) {
 			client_sin.sin_port = htons(server_data[id].port);
 
 			if(connect(server.connfd, (struct sockaddr *) &client_sin, sizeof(client_sin)) < 0) {
-				if(errno != EINPROGRESS) close_socket(server);
+				if(errno != EINPROGRESS) {
+					close_socket(server);
+					continue;
+				}
+				else server.connected = 0;
 			}
-			else {
-				total_conn++;
-				FD_SET(server.connfd, &rset);
-				FD_SET(server.connfd, &wset);
-				if(server.connfd > maxfd) maxfd = server.connfd;
-	    		server.file = fopen(server_data[id].filename , "r");
-	    		server.cansend = 0;
-				server.left = 0;
-			}
+			else server.connected = 1;
+			
+			conn_num++;
+			FD_SET(server.connfd, &rset);
+			FD_SET(server.connfd, &wset);
+			if(server.connfd > maxfd) maxfd = server.connfd;
+    		server.fptr = fopen(server_data[id].filename , "r");
+    		server.prompt = 0;
+			server.left_to_read = 0;
 		}
 	}
 
-	while(total_conn) {
+	while(conn_num) {
 		int err;
+		socklen_t errlen;
 	 	result_rset = rset, result_wset = wset;
 	 	select(maxfd+1, &result_rset, &result_wset, NULL, NULL);
-	 	for(int id = 0; id < server_num; id++ ) {
+
+	 	for(int id = 0; id < server_num; id++) {
 	 		Info& server = server_info[id];
-	 		if(server.connfd < 0) continue;
-	 		
-	 		if(FD_ISSET(server.connfd, &result_rset)) {
-	 			char msg[MAXBUF] = {0};
-	 			if((err = read(server.connfd, msg, MAXBUF)) > 0) {
-	 				cout << "<script>document.all['m" << id << "'].innerHTML += \"";
-	 				for(int pos = 0,len = strlen(msg); pos != len; pos++) {
-	 					if(msg[pos] == '\n') cout << "<br>";
-	 					else if(msg[pos] == '<') cout << "&lt;";
-	 					else if(msg[pos] == '>') cout << "&gt;";
-	 					else if(msg[pos] == '"') cout << "&quot;";
-	 					else if(msg[pos] == ' ') cout << "&nbsp;";
-	 					else if(msg[pos] == '\r') ;
-	 					else {
-	 						if(msg[pos] == '%') server.cansend = 1;
-	 						cout << msg[pos];
-	 					}
-	 				}
-	 				cout << "\";</script>" << endl;
-	 			}
-	 			else if(err == 0){
-	 				FD_CLR(server.connfd,&rset);
-	 				FD_CLR(server.connfd,&wset);
-	 				close_socket(server);
-	 				total_conn--;
-	 			}
-	 			else {
-	 				if(errno != EWOULDBLOCK) return 1;
-	 			}
-	 		}
-	 		if(FD_ISSET(server.connfd, &result_wset)) {
-	 			if(server.left != 0) {
-	 				int nwrite = write(server.connfd, server.pos, server.left);
-	 				if(nwrite < 0) {
-	 					if(errno != EWOULDBLOCK) return 1;
-	 					else continue;
-					}
-	 				server.pos += nwrite;
-	 				server.left -= nwrite;
-	 			}
-	 			else if(server.cansend){
-	 				memset(server.msg, 0 , MAXBUF);
-	 				int nread = 0;
-	 				if(fgets(server.msg, MAXBUF, server.file) != NULL)  {
-		 				nread = strlen(server.msg);
-		 				int nwrite = write(server.connfd, server.msg, nread);
-		 				if(nwrite < 0) {
-	 						if(errno != EWOULDBLOCK) return 1;
-	 						else continue;
-						}
-		 				server.pos = server.msg + nwrite;
-		 				server.left = nread - nwrite;
-		 				server.cansend = 0;
-		 				
-		 				strtok(server.msg,"\r\n");
-		 				cout << "<script>document.all['m" << id << "'].innerHTML += \"<b>";
-		 				for(int pos = 0,len = strlen(server.msg); pos != len; pos++) {
-		 					if(server.msg[pos] == '>') cout << "&gt;";
-		 					else if(server.msg[pos] == '<') cout << "&lt;";
-		 					else if(server.msg[pos] == ' ') cout << "&nbsp;";
-		 					else cout << server.msg[pos];
-		 				}
-		 				cout << "</b><br>\";</script>" << endl;
-	 				}
- 		 			if(nread == 0 || strncmp("exit",server.msg, 4) == 0) {
- 		 				fclose(server.file);
-	 					shutdown(server.connfd, SHUT_WR);
-	 					FD_CLR(server.connfd, &wset);
-	 				}
-	 			}
+	 		if(server.connfd > 0) {
+		 		if(!server.connected) {
+		 			if(FD_ISSET(server.connfd, &result_rset) || FD_ISSET(server.connfd, &result_wset)) {
+		 				err = 0, errlen = sizeof(err);
+		 				if (getsockopt(server.connfd, SOL_SOCKET, SO_ERROR, &err, &errlen) < 0 || err != 0) close_socket(server);
+		 				else server.connected = 1;
+		 			}
+		 		}
+		 		else {
+			 		if(FD_ISSET(server.connfd, &result_rset)) {
+			 			char msg[MAXBUF] = {0};
+			 			usleep(100000);
+			 			if((err = read(server.connfd, msg, MAXBUF)) > 0) {
+			 				cout << "<script>document.all['m" << id << "'].innerHTML += \"";
+			 				for(int pos = 0,len = strlen(msg),first = 1; pos != len; pos++) {
+			 					if(msg[pos] == '\n') cout << "<br>";
+			 					else if(msg[pos] == '<') cout << "&lt;";
+			 					else if(msg[pos] == '>') cout << "&gt;";
+			 					else if(msg[pos] == '"') cout << "&quot;";
+			 					else if(msg[pos] == ' ') {
+			 						if(first && pos >=1 && msg[pos-1] == '%') first = 0;
+									else if(pos >=1 && msg[pos-1] == '%') continue;
+			 						cout << "&nbsp;";
+			 					}
+			 					else if(msg[pos] == '\r') ;
+			 					else {
+			 						if(msg[pos] == '%') {
+			 							server.prompt = 1;
+			 							if(first) cout << msg[pos];
+			 						}
+			 						else cout << msg[pos];
+			 					}
+			 				}
+			 				cout << "\";</script>" << endl;
+			 			}
+			 			else if(err <= 0){
+			 				if(err == 0 || (err <0 && errno!=EWOULDBLOCK)){
+				 				fclose(server.fptr);
+				 				FD_CLR(server.connfd,&rset);
+				 				FD_CLR(server.connfd,&wset);
+				 				close_socket(server);
+				 				conn_num--;
+			 				}
+			 			}
+			 		}
+
+			 		if(FD_ISSET(server.connfd, &result_wset)) {
+			 			if(server.left_to_read != 0) {
+			 				int nwrite = write(server.connfd, server.pos, server.left_to_read);
+			 				if(nwrite < 0) {
+			 					if(errno != EWOULDBLOCK) return 1;
+			 					else continue;
+							}
+							server.prompt = 0;
+							total_write+= nwrite;
+							convert_html(id, server.pos);
+			 				server.pos += nwrite;
+			 				server.left_to_read -= nwrite;
+
+			 			}
+			 			else if(server.prompt){
+			 				memset(server.msg, 0 , MAXBUF);
+			 				int nread = 0;
+			 				server.prompt = 0;
+			 				if(server.fptr != NULL) {
+				 				if(fgets(server.msg, MAXBUF, server.fptr) != NULL) {
+				 					strtok(server.msg, "\n");
+				 					strcat(server.msg, "\n");
+					 				nread = strlen(server.msg);
+					 				total_read += nread;
+					 				int nwrite = write(server.connfd, server.msg, nread);
+					 				
+					 				if(nwrite < 0) {
+				 						if(errno != EWOULDBLOCK) return 1;
+				 						else continue;
+									}
+									total_write += nwrite;
+					 				
+					 				convert_html(id, server.msg);
+					 				server.pos = server.msg + nwrite;
+					 				server.left_to_read = nread - nwrite;
+					
+				 				
+			 		 			if(strncmp("exit",server.msg, 4) == 0) {
+				 					shutdown(server.connfd, SHUT_WR); //total bytes
+				 					FD_CLR(server.connfd, &wset);
+				 				}
+				 				}
+			 				}
+			 			}
+			 		}
+		 		}
 	 		}
 	 	}
 	}
+	//cout << "total_read = " << total_read << "<br>total_write = " << total_write << endl;
 	cout << "</font></body></html>" << endl;
 	return 0;
  }
